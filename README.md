@@ -14,6 +14,8 @@ pinned: false
 
 > AI는 최종 판단자가 아닙니다. 모든 답변은 출처와 함께 제공되며 **정비사의 검증**을 거칩니다.
 
+📖 **동작 원리·기능·설계 상세:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
 ## 무엇을 하나
 
 ```
