@@ -15,6 +15,13 @@ load_dotenv()
 
 st.set_page_config(page_title="항공기 정비 세션 아카이브 RAG", page_icon="🛩️", layout="wide")
 
+EXAMPLES = [
+    "유압 압력이 낮고 경고등이 점등됩니다. 우선 확인할 항목은?",
+    "압력 상승이 안 됩니다",
+    "엔진 배기 온도가 평소보다 올라가요",
+    "무전기 소리가 잘 안 들려요",
+]
+
 
 def ensure_index() -> bool:
     try:
@@ -51,12 +58,6 @@ with st.sidebar:
     aircraft = st.selectbox("기종", ["(전체)"] + config.AIRCRAFT)
     system = st.selectbox("계통", ["(전체)"] + config.SYSTEMS)
 
-    st.divider()
-    if st.button("인덱스 재구축", use_container_width=True):
-        with st.spinner("임베딩 및 적재 중..."):
-            n = index.build()
-        st.success(f"{n}개 세그먼트 적재 완료")
-
 st.title("정비 질의응답 콘솔")
 
 if not ensure_index():
@@ -83,15 +84,23 @@ with tab_chat:
             st.markdown(msg["content"])
             render_sources(msg.get("sources", []))
 
+    st.caption("예시 질문 — 클릭하면 바로 질의됩니다")
+    ex_cols = st.columns(2)
+    picked = None
+    for i, ex in enumerate(EXAMPLES):
+        if ex_cols[i % 2].button(ex, key=f"ex{i}", use_container_width=True):
+            picked = ex
+
     if st.button("대화 비우기"):
         del st.session_state["chat"]
         st.rerun()
 
-    if prompt := st.chat_input("증상이나 질문을 입력하세요..."):
-        st.session_state.chat.append({"role": "user", "content": prompt})
+    user_q = st.chat_input("증상이나 질문을 입력하세요...") or picked
+    if user_q:
+        st.session_state.chat.append({"role": "user", "content": user_q})
         with st.spinner("검색 및 답변 생성 중..."):
             result = pipeline.answer(
-                prompt,
+                user_q,
                 aircraft=None if aircraft == "(전체)" else aircraft,
                 system=None if system == "(전체)" else system,
             )
@@ -135,3 +144,10 @@ with tab_verify:
                     "verified_by": v_by or "미상", "date": "",
                 })
                 st.success(f"세션 #{new_id} 저장 및 인덱스 재구축 완료")
+
+    st.divider()
+    st.caption("관리 도구 — 데이터 파일을 직접 수정했을 때만 사용")
+    if st.button("인덱스 재구축"):
+        with st.spinner("재구축 중..."):
+            n = index.build()
+        st.success(f"{n}개 세그먼트 재적재 완료")
