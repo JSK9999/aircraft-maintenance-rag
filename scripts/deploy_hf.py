@@ -27,7 +27,7 @@ def main() -> None:
     repo_id = sys.argv[1]
     # HF_TOKEN 환경변수 → 없으면 `hf auth login`으로 저장된 토큰 자동 사용
     api = HfApi(token=os.getenv("HF_TOKEN"))
-    api.create_repo(repo_id, repo_type="space", space_sdk="streamlit", exist_ok=True)
+    api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     api.upload_folder(folder_path=root, repo_id=repo_id, repo_type="space",
                       ignore_patterns=IGNORE)

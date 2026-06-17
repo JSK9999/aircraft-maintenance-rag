@@ -3,8 +3,8 @@ title: 항공기 정비 세션 아카이브 RAG
 emoji: 🛩️
 colorFrom: blue
 colorTo: gray
-sdk: streamlit
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
 
