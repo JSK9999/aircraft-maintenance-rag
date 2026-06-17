@@ -13,9 +13,13 @@ WORKDIR /app
 COPY --chown=user requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
+# 임베딩 모델 사전 다운로드 (앱 코드 변경과 무관하게 캐시되어 재배포가 빨라짐)
+RUN python -c "from fastembed import TextEmbedding; \
+    TextEmbedding(model_name='sentence-transformers/paraphrase-multilingual-mpnet-base-v2')"
+
 COPY --chown=user . .
 
-# 이미지 빌드 시 임베딩 모델 다운로드 + 인덱스 사전 구축 (첫 실행 빠르게)
+# 인덱스 사전 구축 (모델은 위에서 캐시됨 → 빠름)
 RUN python -m scripts.build_index
 
 EXPOSE 7860

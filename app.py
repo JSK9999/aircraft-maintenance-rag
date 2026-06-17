@@ -1,6 +1,7 @@
-"""정비 질의응답 콘솔 (Streamlit).
+"""정비 질의응답 콘솔 (Streamlit, 채팅 스타일).
 
-입력(기종/계통/증상/질문) → AI 응답(원인 후보·점검 순서) → 출처(유사 세션·매뉴얼) → 정비사 검증·재저장.
+탭1: 채팅형 질의응답 (질문 → 근거 기반 답변 + 출처)
+탭2: 정비사 검증 · 세션 재저장 (폐쇄 루프) — 일반 사용자 입력과 분리
 실행:  streamlit run app.py
 """
 import os
@@ -23,7 +24,19 @@ def ensure_index() -> bool:
         return False
 
 
-# ---- 사이드바: 상태 / 인덱스 관리 ----
+def render_sources(sources: list[dict]) -> None:
+    if not sources:
+        return
+    with st.expander(f"출처 {len(sources)}건 보기"):
+        for ref in sources:
+            manuals = " · ".join(ref["manuals"]) if ref["manuals"] else "-"
+            st.markdown(
+                f"- **{ref['title']}** (유사도 {ref['similarity']}, {ref['kind']}) "
+                f"— 근거: {manuals}"
+            )
+
+
+# ---- 사이드바: 상태 / 검색 필터 ----
 with st.sidebar:
     st.header("🛩️ 정비 세션 아카이브")
     st.caption("도메인 특화 RAG · 항공기 정비 질의응답 MVP")
@@ -33,13 +46,16 @@ with st.sidebar:
     if not llm_on:
         st.info("로컬에서 OPENAI_API_KEY를 .env에 설정하면 LLM 답변이 활성화됩니다. (공개 배포는 키 없이 폴백 전용)")
 
-    indexed = ensure_index()
-    st.markdown(f"**인덱스 상태:** {'준비됨 ✅' if indexed else '미구축 ⚠️'}")
-    if st.button("인덱스 구축/재구축", use_container_width=True):
-        with st.spinner("임베딩 및 적재 중... (최초 1회 모델 다운로드)"):
+    st.divider()
+    st.subheader("검색 필터")
+    aircraft = st.selectbox("기종", ["(전체)"] + config.AIRCRAFT)
+    system = st.selectbox("계통", ["(전체)"] + config.SYSTEMS)
+
+    st.divider()
+    if st.button("인덱스 재구축", use_container_width=True):
+        with st.spinner("임베딩 및 적재 중..."):
             n = index.build()
         st.success(f"{n}개 세그먼트 적재 완료")
-        st.rerun()
 
 st.title("정비 질의응답 콘솔")
 
@@ -47,79 +63,75 @@ if not ensure_index():
     with st.spinner("최초 인덱스 구축 중입니다 (임베딩 모델 다운로드 포함, 1~2분 소요)..."):
         index.build()
 
-# ---- 입력 영역 ----
-st.subheader("정비사 입력")
-c1, c2, c3 = st.columns(3)
-aircraft = c1.selectbox("기종", ["(전체)"] + config.AIRCRAFT)
-system = c2.selectbox("계통", ["(전체)"] + config.SYSTEMS)
-symptom = c3.selectbox("증상(참고)", ["(선택 안 함)"] + config.SYMPTOMS)
-default_q = "유압 압력이 정상보다 낮습니다. 우선 확인할 항목은 무엇인가요?"
-query = st.text_area("질문", value=default_q, height=90)
+tab_chat, tab_verify = st.tabs(["🛠️ 정비 질의응답", "📝 세션 검증·재저장"])
 
-if st.button("유사 사례 검색 + 답변", type="primary"):
-    if not query.strip():
-        st.error("질문을 입력하세요.")
-    else:
+# ---- 탭 1: 채팅형 질의응답 ----
+with tab_chat:
+    if "chat" not in st.session_state:
+        st.session_state.chat = [{
+            "role": "assistant",
+            "content": "정비 질문을 입력하세요. 기종·계통은 왼쪽 사이드바에서 좁힐 수 있습니다.\n"
+                       "예) \"유압 압력이 낮고 경고등이 점등됩니다. 우선 확인할 항목은?\"",
+            "sources": [], "mode": None,
+        }]
+
+    mode_label = {"llm": "OpenAI 생성", "fallback": "검색 추출형", "no_evidence": "근거 없음"}
+    for msg in st.session_state.chat:
+        with st.chat_message(msg["role"]):
+            if msg.get("mode"):
+                st.caption(f"처리 모드: {mode_label.get(msg['mode'], msg['mode'])}")
+            st.markdown(msg["content"])
+            render_sources(msg.get("sources", []))
+
+    if st.button("대화 비우기"):
+        del st.session_state["chat"]
+        st.rerun()
+
+    if prompt := st.chat_input("증상이나 질문을 입력하세요..."):
+        st.session_state.chat.append({"role": "user", "content": prompt})
         with st.spinner("검색 및 답변 생성 중..."):
             result = pipeline.answer(
-                query,
+                prompt,
                 aircraft=None if aircraft == "(전체)" else aircraft,
                 system=None if system == "(전체)" else system,
             )
-        st.session_state["result"] = result
+        st.session_state.chat.append({
+            "role": "assistant",
+            "content": result["answer"],
+            "sources": result["sources"],
+            "mode": result["mode"],
+        })
+        st.rerun()
 
-# ---- AI 응답 영역 ----
-result = st.session_state.get("result")
-if result:
-    st.subheader("AI 응답")
-    mode_label = {"llm": "OpenAI 생성", "fallback": "검색 추출형", "no_evidence": "근거 없음"}
-    st.caption(f"처리 모드: {mode_label.get(result['mode'], result['mode'])}")
+# ---- 탭 2: 정비사 검증 · 세션 재저장 (폐쇄 루프) ----
+with tab_verify:
+    st.subheader("정비사 검증 · 세션 재저장")
+    st.caption("AI는 최종 판단자가 아닙니다. 정비사가 검증한 결과를 세션으로 저장하면 아카이브가 진화합니다. "
+               "(질문은 위 '정비 질의응답' 탭에서 하세요)")
 
-    if result["mode"] == "no_evidence":
-        st.error(result["answer"])
-    else:
-        st.markdown(result["answer"])
+    with st.form("verify"):
+        v1, v2, v3 = st.columns(3)
+        v_aircraft = v1.selectbox("기종", config.AIRCRAFT, key="v_air")
+        v_system = v2.selectbox("계통", config.SYSTEMS, key="v_sys")
+        v_symptom = v3.selectbox("증상", config.SYMPTOMS, key="v_sym")
+        v_question = st.text_input("질문")
+        v_causes = st.text_input("원인 후보 (쉼표로 구분)")
+        v_action = st.text_input("조치")
+        v_result = st.text_input("결과")
+        v_manual = st.text_input("참고 매뉴얼 (쉼표로 구분)")
+        v_by = st.text_input("검증 정비사")
+        submitted = st.form_submit_button("검증 완료 → 재저장")
 
-        st.markdown("##### 출처")
-        for ref in result["sources"]:
-            manuals = " · ".join(ref["manuals"]) if ref["manuals"] else "-"
-            st.markdown(
-                f"- **{ref['title']}** (유사도 {ref['similarity']}, {ref['kind']}) "
-                f"— 근거: {manuals}"
-            )
-
-        with st.expander("유사 세션·자료 원문 보기"):
-            for ref in result["sources"]:
-                st.write(f"**{ref['title']}** — 유사도 {ref['similarity']}")
-
-# ---- 정비사 검증 · 재저장 (폐쇄 루프) ----
-st.divider()
-st.subheader("정비사 검증 · 세션 재저장")
-st.caption("AI는 최종 판단자가 아닙니다. 정비사가 검증한 결과를 세션으로 저장하면 아카이브가 진화합니다.")
-
-with st.form("verify"):
-    v1, v2, v3 = st.columns(3)
-    v_aircraft = v1.selectbox("기종", config.AIRCRAFT, key="v_air")
-    v_system = v2.selectbox("계통", config.SYSTEMS, key="v_sys")
-    v_symptom = v3.selectbox("증상", config.SYMPTOMS, key="v_sym")
-    v_question = st.text_input("질문")
-    v_causes = st.text_input("원인 후보 (쉼표로 구분)")
-    v_action = st.text_input("조치")
-    v_result = st.text_input("결과")
-    v_manual = st.text_input("참고 매뉴얼 (쉼표로 구분)")
-    v_by = st.text_input("검증 정비사")
-    submitted = st.form_submit_button("검증 완료 → 재저장")
-
-    if submitted:
-        if not (v_question and v_action and v_result):
-            st.error("질문·조치·결과는 필수입니다.")
-        else:
-            new_id = pipeline.save_verified_session({
-                "aircraft": v_aircraft, "system": v_system, "symptom": v_symptom,
-                "fault_code": "", "question": v_question,
-                "cause_candidates": [c.strip() for c in v_causes.split(",") if c.strip()],
-                "action": v_action, "result": v_result,
-                "manual_refs": [m.strip() for m in v_manual.split(",") if m.strip()],
-                "verified_by": v_by or "미상", "date": "",
-            })
-            st.success(f"세션 #{new_id} 저장 및 인덱스 재구축 완료")
+        if submitted:
+            if not (v_question and v_action and v_result):
+                st.error("질문·조치·결과는 필수입니다.")
+            else:
+                new_id = pipeline.save_verified_session({
+                    "aircraft": v_aircraft, "system": v_system, "symptom": v_symptom,
+                    "fault_code": "", "question": v_question,
+                    "cause_candidates": [c.strip() for c in v_causes.split(",") if c.strip()],
+                    "action": v_action, "result": v_result,
+                    "manual_refs": [m.strip() for m in v_manual.split(",") if m.strip()],
+                    "verified_by": v_by or "미상", "date": "",
+                })
+                st.success(f"세션 #{new_id} 저장 및 인덱스 재구축 완료")
