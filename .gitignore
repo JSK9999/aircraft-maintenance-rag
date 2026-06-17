@@ -1,0 +1,15 @@
+# 비밀값 — 절대 커밋 금지
+.env
+
+# 벡터 인덱스 (재구축 가능)
+.chroma/
+
+# 임베딩 모델 캐시
+.fastembed_cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
